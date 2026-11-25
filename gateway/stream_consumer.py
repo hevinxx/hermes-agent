@@ -40,7 +40,7 @@ from gateway.stream_consumer_transport import StreamTransportMixin
 from gateway.stream_consumer_fallback import StreamFallbackMixin
 from gateway.stream_consumer_think import StreamThinkFilterMixin
 from gateway.stream_consumer_ceiling import StreamCeilingMixin
-from gateway.platforms.helpers import reply_file_off
+from gateway.platforms.helpers import balance_fences_across_chunks, reply_file_off
 
 logger = logging.getLogger("gateway.stream_consumer")
 
@@ -958,15 +958,18 @@ class GatewayStreamConsumer(StreamTransportMixin, StreamFallbackMixin, StreamThi
                 break
             if self._ceiling_seal_cut(split_at, final=final):
                 break  # past the reply's message cap: it goes out as a file once complete
-            chunk = self._accumulated[:split_at]
+            # A split inside a ``` fence closes the head's fence AND reopens it (language tag
+            # included) on the rest: the rest would otherwise render its code as prose.
+            head, rest = balance_fences_across_chunks(
+                [self._accumulated[:split_at], self._accumulated[split_at:].lstrip("\n")])
             # finalize=True: the sealed chunk is never edited again, so it needs its
             # rich-text pass now.  is_turn_final=False: a split head is not the
             # answer, so fresh-final must not mark the turn delivered on it.
-            ok = await self._send_or_edit(chunk, finalize=True, is_turn_final=False)
+            ok = await self._send_or_edit(head, finalize=True, is_turn_final=False)
             sent = True
             if self._fallback_final_send or not ok:
                 break  # keep the full text intact for the fallback final send
-            self._accumulated = self._accumulated[split_at:].lstrip("\n")
+            self._accumulated = rest
             self._message_id = None
             self._last_sent_text = ""
             self._turn_split_delivery = True
